@@ -1,0 +1,129 @@
+---
+title: "Practical Machine Learning Project"
+author: "JB"
+date: "20 April 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+```
+## Goal
+
+To create an accurate model to predict how effective an exercise is 
+being completed, given feedback from a variety of sensors.
+
+## Creation of the model
+
+### Libraries and importing data
+
+```{r projectSetup}
+library(caret)
+library(dplyr)
+data<-read.csv("pml-training.csv")
+#Which is available here:
+#https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+validation<-read.csv("pml-testing.csv")
+#Which is available here:
+#https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+set.seed(1337)
+```
+
+### Discarding irrelevant information
+
+```{r selectingData}
+#As a reasonable approximation to discardable data, which columns are of no use because of incomplete cases in the prediction data:
+keepCols<-NULL
+for(col in c(1:ncol(validation))){
+  keepCols[col]<-complete.cases(validation[,col])
+}
+data<-data[,keepCols]
+
+#Non-sensor data: other columns I believe are of no use in the predictions:
+discardCols<-c(1:7)
+data<-data[,-discardCols]
+```
+
+### Splitting the data into testing and training subsets
+
+```{r splittingData}
+#Split into training and testing sets (random sampling)
+inTrain<-createDataPartition(y=data$classe,p=0.8,list=FALSE)
+training<-data[inTrain,]
+testing<-data[-inTrain,]
+```
+
+### First attempt: creating a tree
+
+Due to the classification nature of the project, I decided to look at trees and forests. For using less computational time, and for having possibly more interpretable results, I tried to create a tree. The accuracy, however, was terrible. With this many predictors, this is to be expected.
+
+```{r tree}
+modRpart<-train(classe~.,method="rpart",data=training)
+predRpart<-predict(modRpart,testing[,-53])
+confusionMatrix(predRpart,testing$classe)
+```
+
+### Serious attempt: random forest
+
+With so many predictors, it would take a long time to go through and compare correlations and to make 'pairs' plots. Letting the computer do the work was desirable. So I made a random forest, with mostly default settings. This took well over an hour of time processing time (using a modern i5 processor).
+
+Having this model, though, would reveal if we can make any performance optimisations later.
+
+```{r eval=FALSE}
+#Don't actually run during report creation, takes too long
+modRf<-train(classe~.,method="rf",data=training)
+predRf<-predict(modRf,testing[,-53])
+confusionMatrix(predRf,testing$classe)
+plot(modRf$finalModel)
+```
+
+I learnt that only around 30 trees are needed for excellent results. Also, by adding the 'importance=TRUE' argument to the train() function, we can see which predictors are more important in this model, adding some meaning and interpretability.
+
+```{r smallerRf}
+modRfQuick<-train(classe~.,method="rf",data=training,
+                  importance=TRUE,ntree=30)
+#Do we have enough trees?
+plot(modRfQuick$finalModel)
+#Important predictors:
+varImpPlot(modRfQuick$finalModel,sort = T,n.var=10,
+           main="Top 10 - Variable Importance")
+```
+
+This smaller random forest took about 5 minutes to create. The error rate is low. With less trees, there will possibly be less overfitting as well.
+
+We can also see which predictors have a large influence on the results.
+
+## Cross-Validation note
+
+Inside the model creation process (to pick predictors), it is possible to use the rfcv() function for random forest cross-validation, but I let the train() function take care of that automatically (with bootstrapping).
+
+As noted above, the data was split into training and testing subsets, with only the training set being used in the forest creation. The model was then evaluated with the testing set.
+
+## Expected out of sample error
+
+```{r outOfSample}
+predRfQuick<-predict(modRfQuick,testing[,-53])
+#Accuracy:
+conf<-confusionMatrix(predRfQuick,testing$classe)
+conf$overall[1]
+#Error rate:
+errorRate<-(1-as.numeric(conf$overall[1]))*100
+errorRate
+```
+
+By predicting with out of sample data (testing), we can roughly estimate the error rate, as shown.
+
+## A few thoughts
+
+Given more time, it would be nice to try a boosting function, such as adaboost, and compare results. Also, a blended model (random forest with adaboost) might give further accuracy, but I am happy with the accuracy already.
+
+It could be worth scaling and standardising some predictors, especially those involving a gyroscope where 0 and 360, for example, are the same. 
+
+## Credit where credit is due
+
+The data for this project was kindly made freely available, and came from this source:
+http://groupware.les.inf.puc-rio.br/har
+Thanks to Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H and Collaborators: Wallace Ugulino, Eduardo Velloso, Hugo Fuks.
+Please see this document for more info:
+http://groupware.les.inf.puc-rio.br/public/papers/2013.Velloso.QAR-WLE.pdf
